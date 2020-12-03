@@ -16,7 +16,9 @@
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <signal.h>
-#include "sharedinfo.h"
+#include "shclock.h"
+#include "fauxMQ.h"
+#include "shdescriptors.h"
 #include <math.h>
 #include <getopt.h>
 #include <semaphore.h>
@@ -41,63 +43,61 @@ int nanosecsRand();
 
 
 // Global variables.
-SharedInfo *sharedInfo;
-int infoID;
-int msqID;
+SharedDescriptors *descArray[descriptorLimit];    // Shared Resource structure
+SharedClock *sharedClock;                         // Shared Clock structure
+FauxMQ *fauxMQ[childMax];                         // Shared Faux Message Queue structure
+
+// IDs for shared memory structs
+int shclockID;
+int shResID[descriptorLimit];
+int shMQID[childMax];
+FILE *fptrOut;
 
 
 
 int main (int argc, char *argv[])
 {
-  signal(SIGALRM, raiseAlarm);
+  signal(SIGALRM, raiseAlarm);   // Setup alarm for time termination.
+  srand(time(0));                // Seed random numbers.
 
   printf("oss.c begins....\n");
-
-  int proc_count = 0;
-  int bitVector[18];
   
-  // Timespec struct for nanosleep.
-  struct timespec tim1, tim2;
-  tim1.tv_sec = 0;
-  tim1.tv_nsec = 10000L;
-
- 
+  int opIndex = 0; // getopt var
+  int optH = 0;    // flag
+  int optV = 0;     // flag
   
-  // Allocate shared memory information -------------------------------
-  key_t infoKey = ftok("makefile", 123); 
-  if (infoKey == -1)
+  // Getopt loop.
+  while ((opIndex = getopt(argc, argv, "hv")) != -1)
   {
-    perror("OSS: Error: ftok failure");
-    exit(-1);
+    switch (opIndex)
+    {
+      case 'h':
+        printf("For verbose logging of data choose -v \n");
+        printf("The default is just Deadlock Detection data. \n");
+        return 0;
+        break;
+      
+      case 'v':
+        printf(" Verbose logging format has been chosen. \n");
+        optV = 1;
+        break;
+
+      case '?': // Filter bad input
+        if (isprint (optopt))
+        {
+          perror("OSS: Error: Unknown input.");
+          return -1;
+        }
+        else
+        {
+          perror("OSS: Error: Unknown error occured.");
+          return -1;
+        }
+    }
   }
+
+  alarm(5);
   
-  // Create shared memory ID.
-  infoID = shmget(infoKey, sizeof(SharedInfo), 0600 | IPC_CREAT);
-  if (infoID == -1)
-  {
-    perror("OSS: Error: shmget failure");
-    exit(-1);
-  }
-
-  // Attach to shared memory.
-  sharedInfo = (SharedInfo*)shmat(infoID, (void *)0, 0);
-  if (sharedInfo == (void*)-1)
-  {
-    perror("OSS: Error: shmat failure");
-    exit(-1);
-  }
-
-  alarm(3);
-
-  // Begin launching child processes -----------------------------------  
-  // Set shared clock to zero
-  sharedInfo->secs = 0;
-  sharedInfo->nanosecs = 0;
-
-  // Seed shared clock to a random time for scheduling first process
-  srand(time(0)); // seed random time
-  unsigned int randomTimeToSchedule = randomTime();
-  printf("Random time: %u \n", randomTimeToSchedule);
   
 
 
@@ -110,14 +110,14 @@ int main (int argc, char *argv[])
 
   for (i = 0; i < desciptorLimit; i++)
   {
-    shmdt(rsrcArr[i]);
-    shmctl(shrID[i], IPC_RMID, NULL);
-    shmdt(shInterface[i]);
-    shmctl(shiID[i], IPC_RMID, NULL);
+    shmdt(descArray[i]);
+    shmctl(shResID[i], IPC_RMID, NULL);
+    shmdt(fauxMQ[i]);
+    shmctl(shMQID[i], IPC_RMID, NULL);
   }
 
-  shmdt(shcont); // Detach shared memory.
-  shmctl(shcID, IPC_RMID, NULL); // Destroy shared memory.
+  shmdt(sharedClock); // Detach shared memory.
+  shmctl(shClockID, IPC_RMID, NULL); // Destroy shared memory.
   return 0;
 }
 
@@ -127,13 +127,13 @@ void raiseAlarm() // Kill everything once time limit hits which is 3 real life s
   int i;
   for (i = 0; i < descriptorLimit; i++) 
   {
-    shmdt(rsrcArr[i]);
-    shmctl(shrID[i], IPC_RMID, NULL);
-    shmdt(shInterface[i]);
-    shmctl(shiID[i], IPC_RMID, NULL);
+    shmdt(descArray[i]);
+    shmctl(shResID[i], IPC_RMID, NULL);
+    shmdt(fauxMQ[i]);
+    shmctl(shMQID[i], IPC_RMID, NULL);
   }
-  shmdt(shcont);
-  shmctl(shcID, IPC_RMID, NULL);
+  shmdt(sharedClock);
+  shmctl(shClockID, IPC_RMID, NULL);
   kill(0, SIGKILL);
 }
 
