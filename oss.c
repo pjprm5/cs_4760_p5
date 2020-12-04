@@ -48,10 +48,10 @@ SharedClock *sharedClock;                         // Shared Clock structure
 FauxMQ *fauxMQ[childMax];                         // Shared Faux Message Queue structure
 
 // IDs for shared memory structs
-int shclockID;
+int shClockID;
 int shResID[descriptorLimit];
 int shMQID[childMax];
-FILE *fptrOut;
+FILE *fileOut;
 
 
 
@@ -65,6 +65,17 @@ int main (int argc, char *argv[])
   int opIndex = 0; // getopt var
   int optH = 0;    // flag
   int optV = 0;     // flag
+
+  struct timespec ts1, ts2;
+  ts1.tv_sec = 0;
+  ts1.tv_nsec = 2500L;
+
+  int activeChildren = 0;
+  int proc_count = 0;
+
+  int activeArray[childMax] = { 0 };
+  int fireOff[childMax][3] = { 0 };
+
   
   // Getopt loop.
   while ((opIndex = getopt(argc, argv, "hv")) != -1)
@@ -96,19 +107,85 @@ int main (int argc, char *argv[])
     }
   }
 
-  alarm(5);
+  alarm(5);  // Alarm gets 5 secs until term.
   
+  fileOut = fopen(OUTFILE, "w");
+  fprintf(fileOut, "------------------------------\n");
+  fprintf(fileOut, "------------------------------\n");
+  fprintf(fileOut, "------------BEGIN-------------\n");
+  fprintf(fileOut, "------------------------------\n");
+  fprintf(fileOut, "------------------------------\n");
+  fprintf(fileOut, "------------------------------\n");
+  fprintf(fileOut, "------------------------------\n");
+  fclose(fileOut);
   
 
+  // Shared Memory
+  key_t clockKey = ftok("makefile", (666));
+  if (clockKey == -1)
+  {
+    perror("OSS: Error: ftok failure. \n");
+    exit(-1);
+  }
 
+  shClockID = shmget(clockKey, sizeof(SharedClock), 0600 | IPC_CREAT);
+  if (shClockID == -1)
+  {
+    perror("OSS: Error: shmget failure. \n");
+    exit(-1);
+  }
 
+  sharedClock = (SharedClock*)shmat(shClockID, (void *)0, 0);
+  if (sharedClock == (void*)-1)
+  {
+    perror("OSS: Error: shmat failure. \n");
+    exit(-1);
+  }
 
+  sem_init(&(sharedClock->mutex), 1, 1);
+  sem_wait(&(sharedClock->mutex));
+  sharedClock->spawnCrit = 0;
+  sharedClock->displacement = 0;
+  sem_post(&(sharedClock->mutex));
 
+  // Shared resources. 
   
+  // Range of shared resources between 20-25% of 20 
+  int randShareRes = ((rand() % (5-4+1)) + 4); 
+  int i;
+  int j;
+
+  for (i = 0; i < descriptorLimit; i++)
+  {
+    key_t resKey = ftok("makefile", (667 + i));
+    if (resKey == -1)
+    {
+      perror("OSS: Error: ftok failure. \n");
+      printf(" i: %d\n", i);
+      exit(-1);
+    }
+    
+    shResID[i] = shmget(resKey, sizeof(SharedDescriptors), 0600 | IPC_CREAT);
+    if (shResID[i] == -1)
+    {
+      perror("OSS: Error: shmget failure. \n");
+      printf(" i: %d\n", i);
+      exit(-1);
+    }
+
+    descArray[i] = (SharedDescriptors*)shmat(shResID[i], (void *)0, 0);
+    if (descArray[i] == (void*)-1)
+    {
+      perror("OSS: Error: shmat failure. \n");
+      printf(" i: %d\n", i);
+      exit(-1);
+    }
+  }
+
 
   //Below should never execute
 
-  for (i = 0; i < desciptorLimit; i++)
+  for (i = 0; i < descriptorLimit; i++)
   {
     shmdt(descArray[i]);
     shmctl(shResID[i], IPC_RMID, NULL);
@@ -121,7 +198,7 @@ int main (int argc, char *argv[])
   return 0;
 }
 
-void raiseAlarm() // Kill everything once time limit hits which is 3 real life seconds
+void raiseAlarm() // Kill everything once time limit hits which is 5 real life seconds
 {
   printf("\n Time limit hit, terminating all processes. \n");
   int i;
@@ -159,7 +236,3 @@ int nanosecsRand()
   int randNum = ((rand() % (nanosecsMax)) + 1);
   return randNum;
 }
-
-
-
-

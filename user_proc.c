@@ -91,7 +91,7 @@ int main (int argc, char *argv[])
       exit(-1);
     }
 
-    descArray[i] = (sharedDescriptors*)shmat(shResID[i], (void *)0, 0);
+    descArray[i] = (SharedDescriptors*)shmat(shResID[i], (void *)0, 0);
     if (descArray[i] == (void*)-1)
     {
       perror("USER: Error: shmat failure. \n");
