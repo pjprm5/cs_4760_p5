@@ -180,9 +180,68 @@ int main (int argc, char *argv[])
       printf(" i: %d\n", i);
       exit(-1);
     }
+
+    sem_init(&(descArray[i]->mutex), 1, 1);
+    descArray[i]->descNum = rangeRand(10);
+    
+    // Determine what resources should be shared
+    if (i > ((descriptorLimit - randShareRes) - 1))
+    {
+      descArray[i]->descShare = 1;
+    }
+
+    else
+    {
+      descArray[i]->descShare = 0;
+    }
+    
+    // Inititalize allocation array to zero
+    for (j = 0; j < 10; j++)
+    {
+      descArray[i]->descAlloc[j] = 0;
+    }
+
   }
 
+  // Populate local arrays with resources
+  int resQuantMax[descriptorLimit];
+  int localSharedRes[descriptorLimit];
+  for(i = 0; i < descriptorLimit; i++)
+  {
+    resQuantMax[i] = descArray[i]->descNum;
+    if (descArray[i]->descShare == 1)
+    {
+      localSharedRes[i] = 1;
+    }
+    else
+    {
+      localSharedRes[i] = 0;
+    }
+  }
 
+  printf("Resources available: ");
+  for (i = 0; i < descriptorLimit; i++)
+  {
+    printf("%d ", resQuantMax[i]);
+  }
+  printf("\n");
+  
+  // Variables for stats
+  int lcOut = 0;
+  int printReq = 0;
+  int numReq = 0;
+  int numBlock = 0;
+  
+  int heldFixed[childMax][descriptorLimit] = { 0 };    // number of iterations fHeld did not change
+  int heldPrevious[childMax][descriptorLimit] = { 0 }; // compares current array against the next
+  int heldNow[childMax][descriptorLimit] = { 0 };      // copy new current here
+  
+  // Main Loop
+  
+
+  
+
+  
   //Below should never execute
 
   for (i = 0; i < descriptorLimit; i++)
