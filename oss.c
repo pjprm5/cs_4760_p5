@@ -28,7 +28,7 @@
 #define lineLimit 100000        // Max lines on output file
 #define OUTFILE "output.txt" 
 #define arbitraryCost 250000000 // Arbitrary cost per loop
-#define nanosecsMax 50000000 
+#define nanosecsMax 500000000   // Between 5-100 milliseconds for random fork times (5-100 million nanosecs)
 #define descriptorLimit 20      // Types of resources
 #define progTTL 5               // Number of real life secs until termination
 #define childMax 18             // Max number of children alive
@@ -70,11 +70,11 @@ int main (int argc, char *argv[])
   ts1.tv_sec = 0;
   ts1.tv_nsec = 2500L;
 
-  int activeChildren = 0;
-  int proc_count = 0;
+  int activeChildren = 0;   // # of active children.
+  int proc_count = 0;       // Keep track of 40 processes until term
 
-  int activeArray[childMax] = { 0 };
-  int fireOff[childMax][3] = { 0 };
+  int activeArray[childMax] = { 0 }; // Local array to keep track of active children
+  int fireOff[childMax][3] = { 0 };  // Local array for spawning -> indices req; nanosecs; secs
 
   
   // Getopt loop.
@@ -109,7 +109,7 @@ int main (int argc, char *argv[])
 
   alarm(5);  // Alarm gets 5 secs until term.
   
-  fileOut = fopen(OUTFILE, "a");
+  fileOut = fopen(OUTFILE, "w");
   fprintf(fileOut, "------------------------------\n");
   fprintf(fileOut, "------------------------------\n");
   fprintf(fileOut, "------------BEGIN-------------\n");
@@ -182,6 +182,8 @@ int main (int argc, char *argv[])
     }
 
     sem_init(&(descArray[i]->mutex), 1, 1);
+
+    // Between 1 and 10 inclusive resources populated in each descriptor
     descArray[i]->descNum = rangeRand(10);
     
     // Determine what resources should be shared
@@ -203,9 +205,9 @@ int main (int argc, char *argv[])
 
   }
 
-  // Populate local arrays with resources
-  int resQuantMax[descriptorLimit];
-  int localSharedRes[descriptorLimit];
+  // Populate local arrays with resources, quantity/shared
+  int resQuantMax[descriptorLimit];    // Max quant of res
+  int localSharedRes[descriptorLimit]; // What's shared
   for(i = 0; i < descriptorLimit; i++)
   {
     resQuantMax[i] = descArray[i]->descNum;
@@ -218,7 +220,8 @@ int main (int argc, char *argv[])
       localSharedRes[i] = 0;
     }
   }
-
+  
+  // Print resources available.
   printf("Resources available: ");
   for (i = 0; i < descriptorLimit; i++)
   {
@@ -227,9 +230,9 @@ int main (int argc, char *argv[])
   printf("\n");
   
   // Variables for stats
-  int lineCount = 0;
-  int printReq = 0;
-  int numReq = 0;
+  int lineCount = 0; // Line count
+  int printReq = 0;  // Print request
+  int numReq = 0;    // # of requests
   int numBlock = 0;
   
   int heldFixed[childMax][descriptorLimit] = { 0 };    // number of iterations fHeld did not change
@@ -241,22 +244,26 @@ int main (int argc, char *argv[])
   int mainLoop = 0;
   while (mainLoop == 0)
   {
+    //Term crit, 40 processes, quit.
+    if (proc_count == 40)
+    {
+      break;
+    }
+    // Line count tracker for verbose option
     if (lineCount >= 100000)
     {
       optV = 0;
     }
     
     // Smooth out iterations
-    while(nanosleep(&ts1, &ts2));
-    
+    while(nanosleep(&ts1, &ts2)); 
 
     // Fix clock
     sem_wait(&(sharedClock->mutex));
     if (sharedClock->nanosecs >= 1000000000)
     {
-      int temp = setSecs(sharedClock->nanosecs);
-      sharedClock->secs = sharedClock->secs + temp;
-      sharedClock->nanosecs = sharedClock->nanosecs % 1000000000; 
+      sharedClock->secs = sharedClock->secs + sharedClock->nanosecs/1000000000;
+      sharedClock->nanosecs = sharedClock->nanosecs % 1000000000;
     }
     sem_post(&(sharedClock->mutex));
 
@@ -291,8 +298,8 @@ int main (int argc, char *argv[])
             }
             shmdt(fauxMQ[b]);
             shmctl(shMQID[b], IPC_RMID, NULL);
-            activeArray[b] = 0;
-            activeChildren--;
+            activeArray[b] = 0; // Active array false
+            activeChildren--; // Decrement active child
           }
         }
         sharedClock->termCrit = 0;
@@ -334,15 +341,20 @@ int main (int argc, char *argv[])
             else if (childPid < 0) // retry loop
             {
               checkChild = 0;
-              while(nanosleep(&ts1, &ts2));
+              while(nanosleep(&ts1, &ts2)); // smooth iteration
             }
             else if (childPid > 0)
             {
               activeChildren++;
-              proc_count++;
+              printf("Child#: %d with pid: %d is born ----------> \n", proc_count, childPid);
+              fileOut = fopen(OUTFILE, "a");
+              fprintf(fileOut, "Child #: %d with pid: %d is born ----------->\n", proc_count, childPid); 
+              fclose(fileOut);
+              proc_count++;             
               activeArray[b] = childPid;
               checkChild = 1;
               int remCrit = 0;
+              // Determine displacement 
               while (remCrit == 0)
               {
                 sem_wait(&(sharedClock->mutex));
@@ -360,11 +372,11 @@ int main (int argc, char *argv[])
                 }
               }
             
-
+              //Reset local spawn controls to zero
               fireOff[b][0] = 0;
               fireOff[b][1] = 0;
               fireOff[b][2] = 0;
-
+              //Setup for fauxmq per forked child determine by displacement
               key_t fmqkey = ftok("makefile", (665 - b));
               if (fmqkey == -1)
               {
@@ -442,6 +454,7 @@ int main (int argc, char *argv[])
       {
         for (i = 0; i < descriptorLimit; i++)
         {
+          // If resource is held over deadlocklimit, tag as expired
           if (heldFixed[b][i] > deadLockLimit)
           {
             expired = 1;
@@ -473,8 +486,10 @@ int main (int argc, char *argv[])
       if (activeArray[b] != 0)
       {
         sem_wait(&(fauxMQ[b]->mutex));
+        // Release bait detected, release resources
         if (fauxMQ[b]->fauxReleaseBait == 1)
         {
+          // For verbose setting
           if ((optV == 1) && (lineCount < lineLimit))
           {
             fileOut = fopen(OUTFILE, "a");
@@ -485,7 +500,8 @@ int main (int argc, char *argv[])
           
           for (i = 0; i < descriptorLimit; i++)
           {
-            int freeRes = fauxMQ[b]->fRelease[i][1];
+            int freeRes = fauxMQ[b]->fRelease[i][1]; 
+            // For verbose setting
             if ((optV == 1) && (lineCount < lineLimit))
             {
               fileOut = fopen(OUTFILE, "a");
@@ -502,7 +518,8 @@ int main (int argc, char *argv[])
                 if (deAllocSig == 0)
                 {
                   if (descArray[i]->descAlloc[g] == fauxMQ[b]->fauxPid)
-                  {
+                  { 
+                    // Decrement held and zero out allocation slot
                     descArray[i]->descAlloc[g] = 0;
                     descArray[i]->descHeld--;
                     numBlock++;
@@ -559,11 +576,13 @@ int main (int argc, char *argv[])
           int stopped = 0;
           for (i = 0; i < descriptorLimit; i++)
           {
+            //Request is stopped if request is greater than free resources
             if (fauxMQ[b]->fRequest[i][1] > freeRes[i])
             {
               stopped = 1;
             }
           }
+          //If resources available they are granted
           if (stopped == 0)
           {
             if ((optV == 1) && (lineCount < lineLimit))
@@ -575,6 +594,7 @@ int main (int argc, char *argv[])
             }
 
             sem_wait(&(fauxMQ[b]->mutex));
+            // If request is equal to the pid continue
             for (i = 0; i < descriptorLimit; i++)
             {
               if (fauxMQ[b]->fRequest[i][0] == fauxMQ[b]->fauxPid)
@@ -587,8 +607,9 @@ int main (int argc, char *argv[])
                   fprintf(fileOut, " %d", resTake);
                   fclose(fileOut);
                 }
-
+                
                 sem_wait(&(descArray[i]->mutex));
+                // Update descriptor resources with pid and # of resouces given out
                 for (r = 0; r < resTake; r++)
                 {
                   int allocSig = 0;
@@ -623,6 +644,7 @@ int main (int argc, char *argv[])
               fprintf(fileOut, "\n");
               fclose(fileOut);
               lineCount++;
+              // Every 20 granted requests print out resource table
               if (printReq >= 20)
               {
                 printReq = 0;
@@ -636,10 +658,11 @@ int main (int argc, char *argv[])
                 }
                 fprintf(fileOut, "\n");
                 fprintf(fileOut, "-------------------------------------------------------\n");
-                fprintf(fileOut, "|CHILD| R00 R01 R02 R03 R04 R05 R06 R07 R08 R09 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 |\n");
+                fprintf(fileOut, "|  CHILD  | R00 R01 R02 R03 R04 R05 R06 R07 R08 R09 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 |\n");
 
                 int x;
                 int y;
+                // Printing out resources each iteration
                 for (x = 0; x < childMax; x++)
                 {
                   if (activeArray[x] != 0)
@@ -722,7 +745,7 @@ void raiseAlarm() // Kill everything once time limit hits which is 5 real life s
   shmctl(shClockID, IPC_RMID, NULL);
   kill(0, SIGKILL);
 }
-
+//Set secs in shared clock
 int setSecs(int nanosecs) 
 {
   int accumSecs = 0;
@@ -733,7 +756,7 @@ int setSecs(int nanosecs)
   }
   return accumSecs;
 }
-
+// Detertmine random # for variety of operations
 int rangeRand (int range)
 {
   int randNum = ((rand() % (range)) + 1);

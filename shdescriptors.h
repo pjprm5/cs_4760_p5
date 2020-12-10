@@ -8,10 +8,10 @@
 
 typedef struct
 {
-  int descShare;
-  int descNum;
-  int descHeld;
-  int descAlloc[10];
+  int descShare;     // Is it shared
+  int descNum;       // Number of resources
+  int descHeld;      // Is it held
+  int descAlloc[10]; // Where each resource is allocated to
   sem_t mutex;
 } SharedDescriptors;
 

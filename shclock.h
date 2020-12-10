@@ -15,7 +15,7 @@ typedef struct
   int nanosecs;       // Holds nanoseconds
   int termCrit;       // For termination control
   int spawnCrit;      // For spawn control
-  int displacement; 
+  int displacement;   // find placement within memory/array 
   sem_t mutex;
 } SharedClock;
 

@@ -39,7 +39,7 @@ int shResID[descriptorLimit];
 
 int main (int argc, char *argv[])
 {
-  printf("user_proc.c begins... \n");
+  //printf("user_proc.c begins... \n");
 
   // Seed rand off of pid
   srand(time(NULL)^(getpid()<<16));  
@@ -48,12 +48,12 @@ int main (int argc, char *argv[])
   ts1.tv_sec = 0;
   ts1.tv_nsec = 500L;
   // Time variables
-  int timeToSpawn;
-  int minToTerm;
-  int timeNow;
-  int prevTime;
-  int displacement;
-  int wait;
+  int timeToSpawn;  // Spawn time
+  int minToTerm;    // Time to terminate
+  int timeNow;      // Tracks current time
+  int prevTime;     // tracks previous iteration time
+  int displacement; // finds displacement 
+  int wait;         // waits for pid 
 
   // Shared memory setup
 
@@ -176,21 +176,21 @@ int main (int argc, char *argv[])
 
   // Main loop
 
-  double checkTerm = 99999999999;
-  int actionSig = 0;
-  int mainLoop = 0;
-  int restSig = 0;
-  int skipRelease = 1;
+  double checkTerm = 99999999999;  
+  int actionSig = 0;              
+  int mainLoop = 0;              
+  int restSig = 0;               
+  int skipRelease = 1;            
   int termOver = 0;
 
   while (mainLoop == 0)
   {
-    int mainRelease = 0;
-    int mainRequest = 0;
-    int new = 0;
+    int mainRelease = 0; 
+    int mainRequest = 0; 
+    int new = 0;        
     
     // Check for termination
-    printf("USER: Check 1 \n");
+    //printf("USER: Check 1 \n");
 
     prevTime = timeNow;
     timeNow = (((double) sharedClock->nanosecs/1000000000) + ((double) sharedClock->secs));
@@ -199,10 +199,10 @@ int main (int argc, char *argv[])
     if (timeNow >= minToTerm)
     {
 
-      printf("USER: Check 2 \n");
+      //printf("USER: Check 2 \n");
       if ((timeNow - prevTime) >= checkTerm)
       {
-        printf("USER: Check 2.1 \n");
+        //printf("USER: Check 2.1 \n");
         mainLoop = 1;
         termOver = 1;
         actionSig = 0;
@@ -210,7 +210,7 @@ int main (int argc, char *argv[])
         sem_wait(&(fauxMQ->mutex));
         for (i = 0; i < descriptorLimit; i++)
         {
-          printf("USER: Check 2.2 \n");
+          //printf("USER: Check 2.2 \n");
           fauxMQ->fRelease[i][0] = getpid();
           fauxMQ->fRelease[i][1] = fauxMQ->fHeld[i][1];
           fauxMQ->fauxReleaseBait = 1;
@@ -224,7 +224,7 @@ int main (int argc, char *argv[])
     if (((timeNow - prevTime) >= ((double) (rangeRand(NANO) / 1000000000)) && (termOver == 0)))
     {
 
-      printf("USER: Check 3 \n");
+      //printf("USER: Check 3 \n");
       actionSig = 1;
       int direction = (rangeRand(100) % 2);
       if (direction == 1)
@@ -232,6 +232,7 @@ int main (int argc, char *argv[])
         mainRequest = 1;
         skipRelease = 0;
       }
+   
       else if ((direction == 0) && (restSig == 1) && (skipRelease == 0))
       {
         mainRelease = 1;
@@ -242,12 +243,12 @@ int main (int argc, char *argv[])
     if (actionSig == 1)
     {
 
-      printf("USER: Check 4 \n");
+      //printf("USER: Check 4 \n");
       // Allocate all system resources
       for (i = 0; i < descriptorLimit; i++)
       {
         int j;
-        int rCounter = 0;
+        int rCounter = 0; 
         fauxMQ->fHeld[i][0] = 0;
         fauxMQ->fHeld[i][1] = 0;
         for (j = 0; j < 10; j++)
@@ -276,8 +277,7 @@ int main (int argc, char *argv[])
       // Determine which system resources to release
       if (mainRelease == 1)
       {
-
-        printf("USER: Check 5 \n");
+        //printf("USER: Check 5 \n");
         new = 0;
         for (i = 0; i < descriptorLimit; i++)
         {
@@ -304,8 +304,8 @@ int main (int argc, char *argv[])
       // Determine additional requests
       if (mainRequest == 1)
       {
-        
-        printf("USER: Check 6 \n");
+         
+        //printf("USER: Check 6 \n");
         new = 0;
         for (i = 0; i < descriptorLimit; i++)
         {
@@ -320,6 +320,7 @@ int main (int argc, char *argv[])
 
           else
           {
+           
             int tempAddReq = rangeRand(tempReq);
             if (tempAddReq > 4)
             {  
@@ -329,7 +330,7 @@ int main (int argc, char *argv[])
                 tempAddReq = (tempAddReq/2);
               }
             }
-            
+           
             if (tempAddReq == 1)
             {
               int chanceForZero = rangeRand(100);
@@ -369,7 +370,7 @@ int main (int argc, char *argv[])
     if (mainRelease == 1)
     {
       
-      printf("USER: Check 7 \n");
+      //printf("USER: Check 7 \n");
       while (new == 0)
       {
         if ((fauxMQ->fauxReleaseSig == 1))
@@ -383,11 +384,11 @@ int main (int argc, char *argv[])
         }
       }
     }
-
+    
     else if (mainRequest == 1)
     {
 
-      printf("USER: Check 8 \n");
+      //printf("USER: Check 8 \n");
       while (new == 0)
       {
         if (fauxMQ->fauxRequestSig == 1)
