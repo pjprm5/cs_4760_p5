@@ -109,7 +109,7 @@ int main (int argc, char *argv[])
 
   alarm(5);  // Alarm gets 5 secs until term.
   
-  fileOut = fopen(OUTFILE, "w");
+  fileOut = fopen(OUTFILE, "a");
   fprintf(fileOut, "------------------------------\n");
   fprintf(fileOut, "------------------------------\n");
   fprintf(fileOut, "------------BEGIN-------------\n");
@@ -153,19 +153,19 @@ int main (int argc, char *argv[])
   // Range of shared resources between 20-25% of 20 
   int randShareRes = ((rand() % (5-4+1)) + 4); 
   int i;
-  int j;
+  int g;
 
   for (i = 0; i < descriptorLimit; i++)
   {
-    key_t resKey = ftok("makefile", (667 + i));
-    if (resKey == -1)
+    key_t reskey = ftok("makefile", (667 + i));
+    if (reskey == -1)
     {
       perror("OSS: Error: ftok failure. \n");
       printf(" i: %d\n", i);
       exit(-1);
     }
     
-    shResID[i] = shmget(resKey, sizeof(SharedDescriptors), 0600 | IPC_CREAT);
+    shResID[i] = shmget(reskey, sizeof(SharedDescriptors), 0600 | IPC_CREAT);
     if (shResID[i] == -1)
     {
       perror("OSS: Error: shmget failure. \n");
@@ -196,9 +196,9 @@ int main (int argc, char *argv[])
     }
     
     // Inititalize allocation array to zero
-    for (j = 0; j < 10; j++)
+    for (g = 0; g < 10; g++)
     {
-      descArray[i]->descAlloc[j] = 0;
+      descArray[i]->descAlloc[g] = 0;
     }
 
   }
@@ -227,7 +227,7 @@ int main (int argc, char *argv[])
   printf("\n");
   
   // Variables for stats
-  int lcOut = 0;
+  int lineCount = 0;
   int printReq = 0;
   int numReq = 0;
   int numBlock = 0;
@@ -238,10 +238,459 @@ int main (int argc, char *argv[])
   
   // Main Loop
   
+  int mainLoop = 0;
+  while (mainLoop == 0)
+  {
+    if (lineCount >= 100000)
+    {
+      optV = 0;
+    }
+    
+    // Smooth out iterations
+    while(nanosleep(&ts1, &ts2));
+    
 
-  
+    // Fix clock
+    sem_wait(&(sharedClock->mutex));
+    if (sharedClock->nanosecs >= 1000000000)
+    {
+      int temp = setSecs(sharedClock->nanosecs);
+      sharedClock->secs = sharedClock->secs + temp;
+      sharedClock->nanosecs = sharedClock->nanosecs % 1000000000; 
+    }
+    sem_post(&(sharedClock->mutex));
 
-  
+    // Child Logic, handle dead children
+    int b;
+    if (activeChildren > 0)
+    {
+      sem_wait(&(sharedClock->mutex));
+      if (sharedClock-> termCrit != 0)
+      {
+        //waitpid(sharedClock->termCrit);
+        wait(NULL);
+        for (b = 0; b < childMax; b++)
+        {
+          if (activeArray[b] == sharedClock->termCrit)
+          {
+
+            // Clear out resources held by dead child
+            for (i = 0; i < descriptorLimit; i++)
+            {
+              int j;
+              for (j = 0; j < 10; j++)
+              {
+                if (descArray[i]->descAlloc[j] == sharedClock->termCrit)
+                {
+                  descArray[i]->descAlloc[j] = 0;
+                }
+              }
+              heldPrevious[b][i] = 0;
+              heldNow[b][i] = 0;
+              heldFixed[b][i] = 0;
+            }
+            shmdt(fauxMQ[b]);
+            shmctl(shMQID[b], IPC_RMID, NULL);
+            activeArray[b] = 0;
+            activeChildren--;
+          }
+        }
+        sharedClock->termCrit = 0;
+      }
+      sem_post(&(sharedClock->mutex));
+    }
+
+    // Search for available child slots
+    for (b = 0; b < childMax; b++)
+    {
+      if ((activeArray[b] == 0) && (fireOff[b][0] == 0))
+      {
+        fireOff[b][0] = 1; // Prompt for child to fire off
+        fireOff[b][1] = (sharedClock->nanosecs + nanosecsRand()); // time for fork nano
+        fireOff[b][2] = (sharedClock->secs); // time for fork secs
+      }
+    }
+
+    // Populate vacant children
+    pid_t childPid;
+    int breakOff = 0;
+    for (b = 0; b < childMax; b++)
+    {
+      if (fireOff[b][0] == 1)
+      {
+        if ((sharedClock->nanosecs >= fireOff[b][1]) && (sharedClock->secs >= fireOff[b][2]) && (activeChildren <= childMax))
+        {
+          int checkChild = 0;
+          while (checkChild == 0)
+          {
+            // Controls child replacement
+            checkChild = 1;
+            childPid = fork();
+            if (childPid == 0)
+            {
+              char *args[] = {"./user_proc", NULL};
+              execvp(args[0], args);
+            }
+            else if (childPid < 0) // retry loop
+            {
+              checkChild = 0;
+              while(nanosleep(&ts1, &ts2));
+            }
+            else if (childPid > 0)
+            {
+              activeChildren++;
+              proc_count++;
+              activeArray[b] = childPid;
+              checkChild = 1;
+              int remCrit = 0;
+              while (remCrit == 0)
+              {
+                sem_wait(&(sharedClock->mutex));
+                if (sharedClock->spawnCrit == 0)
+                {
+                  sharedClock->spawnCrit = childPid;
+                  sharedClock->displacement = b;
+                  sem_post(&(sharedClock->mutex));
+                  remCrit = 1;
+                }
+                else
+                {
+                  sem_post(&(sharedClock->mutex));
+                  while(nanosleep(&ts1, &ts2));
+                }
+              }
+            
+
+              fireOff[b][0] = 0;
+              fireOff[b][1] = 0;
+              fireOff[b][2] = 0;
+
+              key_t fmqkey = ftok("makefile", (665 - b));
+              if (fmqkey == -1)
+              {
+                perror("OSS: Error: ftok failure. \n");
+                exit(-1);
+              }
+              shMQID[b] = shmget(fmqkey, sizeof(FauxMQ), 0600 | IPC_CREAT);
+              if (shMQID[b] == -1)
+              {
+                perror("OSS: Error: shmget failure. \n");
+                exit(-1);
+              }
+              fauxMQ[b] = (FauxMQ*)shmat(shMQID[b], (void *)0, 0);
+              if (fauxMQ[b] == (void*)-1)
+              {
+                perror("OSS: Error: shmat failure. \n");
+                exit(-1);
+              }
+              sem_init(&(fauxMQ[b]->mutex), 1, 1);
+            }
+          }
+        }
+      }
+    }
+
+    // Deadlock prevention
+
+    for (b = 0; b < childMax; b++) // Recoup status
+    {
+      if (activeArray[b] != 0) // Go through all living children
+      {
+        for (i = 0; i < descriptorLimit; i++) // And each resource
+        {
+          heldPrevious[b][i] = heldNow[b][i];
+        }
+      }
+    }
+
+    // Seek updated status
+
+    for (b = 0; b < childMax; b++)
+    {
+      if (activeArray[b] != 0)
+      {
+        for (i = 0; i < descriptorLimit; i++)
+        {
+          heldNow[b][i] = fauxMQ[b]->fHeld[i][1];
+        }
+      }
+    }
+
+    // Check for expired resources
+    for (b = 0; b < childMax; b++)
+    {
+      if (activeArray[b] != 0)
+      {
+        for (i = 0; i < descriptorLimit; i++)
+        {
+          if (heldPrevious[b][i] == heldNow[b][i])
+          {
+            if (heldNow[b][i] != 0)
+            {
+              heldFixed[b][i]++;
+            }
+          }
+        }
+      }
+    }
+
+    // Clear expired resources
+    int expired = 0;
+    for (b = 0; b < childMax; b++)
+    {
+      if (activeArray[b] != 0)
+      {
+        for (i = 0; i < descriptorLimit; i++)
+        {
+          if (heldFixed[b][i] > deadLockLimit)
+          {
+            expired = 1;
+            sem_wait(&(fauxMQ[b]->mutex));
+            fauxMQ[b]->fRelease[i][1] = fauxMQ[b]->fHeld[i][1];
+            fauxMQ[b]->fauxReleaseBait = 1;
+            fauxMQ[b]->fauxRequestBait = 0;
+            fauxMQ[b]->fauxRequestSig = 0;
+            heldFixed[b][i] = 0;
+            sem_post(&(fauxMQ[b]->mutex));
+          }
+        }
+      }
+    }
+
+    if (expired == 1)
+    {
+      fileOut = fopen(OUTFILE, "a");
+      fprintf(fileOut, "---------DEADLOCK DETECTED AND FIXED -----------------\n");
+      fprintf(fileOut, "Time: %09f --- #Requests: %d --- #Blocks: %d \n", (((double)sharedClock->nanosecs/1000000000) + ((double) sharedClock->secs)), numReq, numBlock);
+      fprintf(fileOut, "------------------------------------------------------\n");
+      fclose(fileOut);
+    }
+
+    // Release Resources
+    
+    for (b = 0; b < childMax; b++)
+    {
+      if (activeArray[b] != 0)
+      {
+        sem_wait(&(fauxMQ[b]->mutex));
+        if (fauxMQ[b]->fauxReleaseBait == 1)
+        {
+          if ((optV == 1) && (lineCount < lineLimit))
+          {
+            fileOut = fopen(OUTFILE, "a");
+            fprintf(fileOut, "OSS: Child %d resources deallocation: ", fauxMQ[b]->fauxPid);
+            lineCount++;
+            fclose(fileOut);
+          }
+          
+          for (i = 0; i < descriptorLimit; i++)
+          {
+            int freeRes = fauxMQ[b]->fRelease[i][1];
+            if ((optV == 1) && (lineCount < lineLimit))
+            {
+              fileOut = fopen(OUTFILE, "a");
+              fprintf(fileOut, " %d", freeRes);
+              fclose(fileOut);
+            }
+            int r;
+            sem_wait(&(descArray[i]->mutex));
+            for (r = 0; r < freeRes; r++)
+            {
+              int deAllocSig = 0;
+              for (g = 0; g < 10; g++)
+              {
+                if (deAllocSig == 0)
+                {
+                  if (descArray[i]->descAlloc[g] == fauxMQ[b]->fauxPid)
+                  {
+                    descArray[i]->descAlloc[g] = 0;
+                    descArray[i]->descHeld--;
+                    numBlock++;
+                    deAllocSig = 1;
+                  }
+                }
+              }
+            }
+            sem_post(&(descArray[i]->mutex));
+            fauxMQ[b]->fHeld[i][1] = fauxMQ[b]->fHeld[i][1] - fauxMQ[b]->fRelease[i][1];
+            fauxMQ[b]->fRelease[i][1] = 0;
+            fauxMQ[b]->fauxReleaseBait = 0;
+            fauxMQ[b]->fauxReleaseSig = 1;
+          }
+          sem_post(&(fauxMQ[b]->mutex));
+          if ((optV == 1) && (lineCount < lineLimit))
+          {
+            fileOut = fopen(OUTFILE, "a");
+            fprintf(fileOut, "\n");
+            fclose(fileOut);
+            lineCount++;
+          }
+        }
+        else
+        {
+          sem_post(&(fauxMQ[b]->mutex));
+        }
+      }
+    }
+
+    // Request Resources
+   
+    // Update free resouces
+    int freeRes[20];
+    for (i = 0; i < descriptorLimit; i++)
+    {
+      freeRes[i] = resQuantMax[i];
+      for (g = 0; g < 10; g++)
+      {
+        if (descArray[i]->descAlloc[g] != 0)
+        {
+          freeRes[i]--;
+        }
+      }
+    }
+
+    // Now request resources
+    for (b = 0; b < childMax; b++)
+    {
+      if (activeArray[b] != 0)
+      {
+        if (fauxMQ[b]->fauxRequestBait == 1)
+        {
+          int stopped = 0;
+          for (i = 0; i < descriptorLimit; i++)
+          {
+            if (fauxMQ[b]->fRequest[i][1] > freeRes[i])
+            {
+              stopped = 1;
+            }
+          }
+          if (stopped == 0)
+          {
+            if ((optV == 1) && (lineCount < lineLimit))
+            {
+              fileOut = fopen(OUTFILE, "a");
+              fprintf(fileOut, "OSS: Child %d Resources Allocated: ", fauxMQ[b]->fauxPid);
+              fclose(fileOut);
+              lineCount++;
+            }
+
+            sem_wait(&(fauxMQ[b]->mutex));
+            for (i = 0; i < descriptorLimit; i++)
+            {
+              if (fauxMQ[b]->fRequest[i][0] == fauxMQ[b]->fauxPid)
+              {
+                int resTake = fauxMQ[b]->fRequest[i][1];
+                int r;
+                if ((optV == 1) && (lineCount < lineLimit))
+                {
+                  fileOut = fopen(OUTFILE, "a");
+                  fprintf(fileOut, " %d", resTake);
+                  fclose(fileOut);
+                }
+
+                sem_wait(&(descArray[i]->mutex));
+                for (r = 0; r < resTake; r++)
+                {
+                  int allocSig = 0;
+                  for (g = 0; g < 10; g++)
+                  {
+                    if (allocSig == 0)
+                    {
+                       if (descArray[i]->descAlloc[g] == 0)
+                       {
+                         descArray[i]->descAlloc[g] = fauxMQ[b]->fauxPid;
+                         descArray[i]->descHeld++;
+                         numReq++;
+                         printReq++;
+                         allocSig = 1;
+                       }  
+                    }
+                  }
+                }
+                sem_post(&(descArray[i]->mutex));
+                fauxMQ[b]->fHeld[i][0] = fauxMQ[b]->fauxPid;
+                fauxMQ[b]->fHeld[i][1] = resTake;
+                fauxMQ[b]->fRequest[i][1] = 0;
+                fauxMQ[b]->fauxRequestBait = 0;
+                fauxMQ[b]->fauxRequestSig = 1;
+              }
+            }
+
+            sem_post(&(fauxMQ[b]->mutex));
+            if ((optV == 1) && (lineCount < lineLimit))
+            {
+              fileOut = fopen(OUTFILE, "a");
+              fprintf(fileOut, "\n");
+              fclose(fileOut);
+              lineCount++;
+              if (printReq >= 20)
+              {
+                printReq = 0;
+                fileOut = fopen(OUTFILE, "a");
+                fprintf(fileOut, "------------- Child %d Request Approved ---------------- \n", fauxMQ[b]->fauxPid);
+                fprintf(fileOut, "------------- Time: %09f --- #Request: %d --- #Blocks: %d \n", (((double)sharedClock->nanosecs/1000000000) + ((double) sharedClock->secs)), numReq, numBlock);
+                fprintf(fileOut, "Resource Matrix: ");
+                for (i = 0; i < descriptorLimit; i++)
+                {
+                  fprintf(fileOut, "%d ", resQuantMax[i]);
+                }
+                fprintf(fileOut, "\n");
+                fprintf(fileOut, "-------------------------------------------------------\n");
+                fprintf(fileOut, "|CHILD| R00 R01 R02 R03 R04 R05 R06 R07 R08 R09 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 |\n");
+
+                int x;
+                int y;
+                for (x = 0; x < childMax; x++)
+                {
+                  if (activeArray[x] != 0)
+                  {
+                    if (x < 10) 
+                    {
+                      fprintf(fileOut, "Child[0%d] | ", x);
+                    }
+                    if (x >= 10)
+                    {
+                      fprintf(fileOut, "Child[%d] | ", x);
+                    }
+                    for (y = 0; y < descriptorLimit; y++)
+                    {
+                      sem_wait(&(fauxMQ[x]->mutex));
+                      if (fauxMQ[x]->fHeld[y][1] < 10)
+                      {
+                        if (fauxMQ[x]->fHeld[y][1] == 0)
+                        {
+                          fprintf(fileOut, "  - ");
+                        }
+                        else 
+                        {
+                          fprintf(fileOut, "  %d ", fauxMQ[x]->fHeld[y][1]);
+                        }
+                      }
+                      if (fauxMQ[x]->fHeld[y][1] >= 10)
+                      {
+                        fprintf(fileOut, " %d ", fauxMQ[x]->fHeld[y][1]);
+                      }
+                      sem_post(&(fauxMQ[x]->mutex));
+                    }
+                    fprintf(fileOut, "|\n");
+                  }
+                }
+                fprintf(fileOut, "--------------------------------------------------------------------\n");
+                fclose(fileOut);
+                lineCount = lineCount + 8 + activeChildren;
+              }
+            }
+          }
+        }
+      }
+    }
+    // Increment clock
+    sem_wait(&(sharedClock->mutex));
+    sharedClock->nanosecs = sharedClock->nanosecs + (arbitraryCost);
+    sem_post(&(sharedClock->mutex));
+    //printf("OSS: Reached clock inc.\n");
+  }
+
   //Below should never execute
 
   for (i = 0; i < descriptorLimit; i++)
@@ -254,6 +703,7 @@ int main (int argc, char *argv[])
 
   shmdt(sharedClock); // Detach shared memory.
   shmctl(shClockID, IPC_RMID, NULL); // Destroy shared memory.
+  kill(0, SIGKILL);
   return 0;
 }
 

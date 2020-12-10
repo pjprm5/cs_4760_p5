@@ -11,8 +11,8 @@
 
 typedef struct 
 {
-  unsigned int secs;           // Holds seconds
-  unsigned int nanosecs;       // Holds nanoseconds
+  int secs;           // Holds seconds
+  int nanosecs;       // Holds nanoseconds
   int termCrit;       // For termination control
   int spawnCrit;      // For spawn control
   int displacement; 

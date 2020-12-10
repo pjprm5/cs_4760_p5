@@ -48,10 +48,10 @@ int main (int argc, char *argv[])
   ts1.tv_sec = 0;
   ts1.tv_nsec = 500L;
   // Time variables
-  unsigned int timeToSpawn;
-  unsigned int minToTerm;
-  unsigned int timeNow;
-  unsigned int prevTime;
+  int timeToSpawn;
+  int minToTerm;
+  int timeNow;
+  int prevTime;
   int displacement;
   int wait;
 
@@ -82,15 +82,15 @@ int main (int argc, char *argv[])
   int i;
   for (i = 0; i < descriptorLimit; i++)
   {
-    key_t clockKey = ftok("makefile", (667 + i));
-    if (clockKey == -1)
+    key_t reskey = ftok("makefile", (667 + i));
+    if (reskey == -1)
     {
       perror("USER: Error: ftok failure. \n");
       printf(" i: %d\n", i);
       exit(-1);
     }
 
-    shResID[i] = shmget(clockKey, sizeof(SharedDescriptors), 0600 | IPC_CREAT);
+    shResID[i] = shmget(reskey, sizeof(SharedDescriptors), 0600 | IPC_CREAT);
     if (shResID[i] == -1)
     {
       perror("USER: Error: shmget failure. \n");
@@ -119,8 +119,8 @@ int main (int argc, char *argv[])
       sem_post(&(sharedClock->mutex));
       wait = 1;
       
-      timeToSpawn = (sharedClock->nanosecs/1000000000) + (sharedClock->secs);
-      minToTerm = (sharedClock->nanosecs/1000000000) + (sharedClock->secs) + 1;
+      timeToSpawn = (((double) sharedClock->nanosecs/1000000000) + ((double) sharedClock->secs));
+      minToTerm = ((double) sharedClock->nanosecs/1000000000) + ((double) sharedClock->secs) + 1;
       
       key_t fmqkey = ftok("makefile", (665 - displacement));
       if (fmqkey == -1)
@@ -147,7 +147,7 @@ int main (int argc, char *argv[])
       fauxMQ->fauxPid = getpid();
       for (i = 0; i < 20; i++)
       {
-        fauxMQ->fRelease[i][0]= 0;
+        fauxMQ->fRelease[i][0] = 0;
         fauxMQ->fRelease[i][1] = 0;
         fauxMQ->fRequest[i][0] = getpid();
         fauxMQ->fRequest[i][1] = 0;
@@ -166,7 +166,7 @@ int main (int argc, char *argv[])
   }
   
   printf("USER: Child: %d with displacement:%d \n", getpid(), displacement);
-  
+  printf("Secs: %d Nanosecs: %d \n", sharedClock->secs, sharedClock->nanosecs);
   // Populate array w/ quantity of each resource
   int resQuantity[descriptorLimit];
   for (i = 0; i < descriptorLimit; i++)
@@ -176,7 +176,7 @@ int main (int argc, char *argv[])
 
   // Main loop
 
-  unsigned long checkTerm = 99999999999;
+  double checkTerm = 99999999999;
   int actionSig = 0;
   int mainLoop = 0;
   int restSig = 0;
@@ -188,13 +188,21 @@ int main (int argc, char *argv[])
     int mainRelease = 0;
     int mainRequest = 0;
     int new = 0;
-
+    
     // Check for termination
+    printf("USER: Check 1 \n");
+
     prevTime = timeNow;
+    timeNow = (((double) sharedClock->nanosecs/1000000000) + ((double) sharedClock->secs));
+    
+    printf("USER: Child: %d: CT:%f ST: %f MTT: %f \n", getpid(), timeNow, timeToSpawn, minToTerm);
     if (timeNow >= minToTerm)
     {
+
+      printf("USER: Check 2 \n");
       if ((timeNow - prevTime) >= checkTerm)
       {
+        printf("USER: Check 2.1 \n");
         mainLoop = 1;
         termOver = 1;
         actionSig = 0;
@@ -202,6 +210,7 @@ int main (int argc, char *argv[])
         sem_wait(&(fauxMQ->mutex));
         for (i = 0; i < descriptorLimit; i++)
         {
+          printf("USER: Check 2.2 \n");
           fauxMQ->fRelease[i][0] = getpid();
           fauxMQ->fRelease[i][1] = fauxMQ->fHeld[i][1];
           fauxMQ->fauxReleaseBait = 1;
@@ -212,8 +221,10 @@ int main (int argc, char *argv[])
     }
 
     // Determine release or requesting or none
-    if (((timeNow - prevTime) >= (rangeRand(NANO) / 1000000000)) && (termOver == 0))
+    if (((timeNow - prevTime) >= ((double) (rangeRand(NANO) / 1000000000)) && (termOver == 0)))
     {
+
+      printf("USER: Check 3 \n");
       actionSig = 1;
       int direction = (rangeRand(100) % 2);
       if (direction == 1)
@@ -230,6 +241,8 @@ int main (int argc, char *argv[])
     // Main resource release
     if (actionSig == 1)
     {
+
+      printf("USER: Check 4 \n");
       // Allocate all system resources
       for (i = 0; i < descriptorLimit; i++)
       {
@@ -258,11 +271,13 @@ int main (int argc, char *argv[])
           }
         }
       }
-    }
+    
 
       // Determine which system resources to release
       if (mainRelease == 1)
       {
+
+        printf("USER: Check 5 \n");
         new = 0;
         for (i = 0; i < descriptorLimit; i++)
         {
@@ -276,8 +291,8 @@ int main (int argc, char *argv[])
             if (rangeRand(tempRange) > 25)
             {
               sem_wait(&(fauxMQ->mutex));
-              fauxMQ->fRelease[1][0] = getpid();
-              fauxMQ->fRelease[1][1] = rangeRand(fauxMQ->fHeld[i][1]);
+              fauxMQ->fRelease[i][0] = getpid();
+              fauxMQ->fRelease[i][1] = rangeRand(fauxMQ->fHeld[i][1]);
               fauxMQ->fauxReleaseBait = 1;
               sem_post(&(fauxMQ->mutex));
             }
@@ -285,9 +300,12 @@ int main (int argc, char *argv[])
         }
       }
 
+
       // Determine additional requests
       if (mainRequest == 1)
       {
+        
+        printf("USER: Check 6 \n");
         new = 0;
         for (i = 0; i < descriptorLimit; i++)
         {
@@ -304,7 +322,7 @@ int main (int argc, char *argv[])
           {
             int tempAddReq = rangeRand(tempReq);
             if (tempAddReq > 4)
-            {
+            {  
               int decay = (rangeRand(100) % 2);
               if (decay == 0)
               {
@@ -329,50 +347,61 @@ int main (int argc, char *argv[])
                 fauxMQ->fauxRequestBait = 1;
                 sem_post(&(fauxMQ->mutex));
               }
+            } 
+            else
+            {
+              fauxMQ->fRequest[i][0] = getpid();
+              fauxMQ->fRequest[i][1] = tempAddReq;
+              fauxMQ->fauxRequestBait = 1;
+              sem_post(&(fauxMQ->mutex));
             }
           }
         }
       }
+    }
+    else 
+    {
+      while (nanosleep(&ts1, &ts2));
+    }
 
-      else 
+    // Loop to mediate action between parent/child
+
+    if (mainRelease == 1)
+    {
+      
+      printf("USER: Check 7 \n");
+      while (new == 0)
       {
-        while (nanosleep(&ts1, &ts2));
-      }
-
-      // Loop to mediate action between parent/child
-
-      if (mainRelease = 1)
-      {
-        while (new == 0)
+        if ((fauxMQ->fauxReleaseSig == 1))
         {
-          if ((fauxMQ->fauxReleaseSig == 1))
-          {
-            new = 1;
-            fauxMQ->fauxReleaseSig = 0;
-          }
-          else
-          {
-            while (nanosleep(&ts1, &ts2));
-          }
+          new = 1;
+          fauxMQ->fauxReleaseSig = 0;
+        }
+        else
+        {
+          while (nanosleep(&ts1, &ts2));
         }
       }
+    }
 
-      else if (mainRequest == 1)
+    else if (mainRequest == 1)
+    {
+
+      printf("USER: Check 8 \n");
+      while (new == 0)
       {
-        while (new == 0)
+        if (fauxMQ->fauxRequestSig == 1)
         {
-          if ((fauxMQ->fauxRequestSig == 1))
-          {
-            new = 1;
-            restSig = 1;
-            fauxMQ->fauxRequestSig = 0;
-          }
-          else
-          {
-            while (nanosleep(&ts1, &ts2));
-          }
+          new = 1;
+          restSig = 1;
+          fauxMQ->fauxRequestSig = 0;
+        }
+        else
+        {
+          while (nanosleep(&ts1, &ts2));
         }
       }
+    }
   }      
   // Termination
   sem_wait(&(sharedClock->mutex));
