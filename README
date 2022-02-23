@@ -1,0 +1,13 @@
+// Paul Passiglia
+// cs_4760
+// Project 5
+// 12/9/20
+
+Issue make command first
+Verbose: ./oss -v
+Non Verbose: ./oss
+Help: ./oss -h
+Process count of spawned children never quite goes past 23, not sure what's holding that up.
+Communication between parent/child is done using shared structs instead of message queue.
+Most required stats are displayed in verbose, deadlock status in non-verbose.
+
